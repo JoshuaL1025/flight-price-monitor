@@ -1,0 +1,44 @@
+name: 机票价格监控
+
+on:
+  schedule:
+    # 每天北京时间 8:00 运行（UTC 0:00）
+    - cron: '0 0 * * *'
+  
+  # 也可以手动触发
+  workflow_dispatch:
+
+jobs:
+  crawl-flights:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+      
+      - name: 设置 Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 安装依赖
+        run: |
+          pip install selenium requests
+          
+      - name: 安装 Chrome 和 ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+          
+      - name: 运行爬虫
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python crawler.py
+      
+      - name: 保存历史数据
+        uses: actions/upload-artifact@v3
+        with:
+          name: flight-prices
+          path: flight_prices.json
+          retention-days: 30
