@@ -3,9 +3,11 @@
 """
 携程机票爬虫 - GitHub Actions 版本
 南通 → 长春
+支持指定日期查询
 """
 
 import os
+import sys
 import json
 import time
 import requests
@@ -20,6 +22,9 @@ from selenium.webdriver.chrome.options import Options
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+# 查询日期（可通过环境变量或命令行参数指定）
+QUERY_DATE = os.getenv('QUERY_DATE', '')
+
 class FlightCrawler:
     def __init__(self):
         self.from_city = 'NTG'  # 南通
@@ -29,7 +34,7 @@ class FlightCrawler:
     def init_driver(self):
         """初始化 Chrome 浏览器"""
         chrome_options = Options()
-        chrome_options.add_argument('--headless')  # 无头模式
+        chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
@@ -42,41 +47,31 @@ class FlightCrawler:
     def get_flights(self, date_str):
         """获取航班信息"""
         try:
-            # 构造携程搜索 URL
             url = f'https://flights.ctrip.com/booking/{self.from_city.lower()}-{self.to_city.lower()}-day-1.html?ddate1={date_str}'
             
             print(f"🔍 正在访问: {url}")
             self.driver.get(url)
-            
-            # 等待页面加载
             time.sleep(5)
             
-            # 等待航班列表加载
             wait = WebDriverWait(self.driver, 20)
             wait.until(EC.presence_of_element_located((By.CLASS_NAME, 'flight-item')))
             
             print("✅ 页面加载完成，开始解析数据...")
             
-            # 解析航班信息
             flights = []
             flight_items = self.driver.find_elements(By.CLASS_NAME, 'flight-item')
             
-            for item in flight_items[:5]:  # 只取前 5 个航班
+            for item in flight_items[:5]:
                 try:
-                    # 提取航班号
                     flight_no = item.find_element(By.CLASS_NAME, 'flight-No').text
-                    
-                    # 提取时间
                     times = item.find_elements(By.CLASS_NAME, 'time')
                     departure_time = times[0].text if len(times) > 0 else ''
                     arrival_time = times[1].text if len(times) > 1 else ''
                     
-                    # 提取价格
                     price_elem = item.find_element(By.CLASS_NAME, 'price')
                     price_text = price_elem.text.replace('¥', '').replace(',', '')
                     price = int(price_text) if price_text.isdigit() else 0
                     
-                    # 提取航空公司
                     airline = item.find_element(By.CLASS_NAME, 'airline-name').text
                     
                     flight_info = {
@@ -101,7 +96,6 @@ class FlightCrawler:
             
         except Exception as e:
             print(f"❌ 获取航班失败: {e}")
-            # 保存截图用于调试
             self.driver.save_screenshot('error.png')
             return []
     
@@ -112,13 +106,11 @@ class FlightCrawler:
         if not flights:
             return None
         
-        # 过滤有效价格
         valid_flights = [f for f in flights if f['price'] > 0]
         
         if not valid_flights:
             return None
         
-        # 找最低价
         lowest = min(valid_flights, key=lambda x: x['price'])
         return lowest
     
@@ -155,23 +147,18 @@ def send_telegram_message(message):
 def save_to_file(data, filename='flight_prices.json'):
     """保存数据"""
     try:
-        # 读取历史数据
         history = []
         if os.path.exists(filename):
             with open(filename, 'r', encoding='utf-8') as f:
                 history = json.load(f)
         
-        # 添加新记录
         record = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'flight': data
         }
         history.append(record)
-        
-        # 只保留最近 30 天
         history = history[-30:]
         
-        # 保存
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
         
@@ -186,22 +173,25 @@ def main():
     print("🚀 携程机票爬虫启动")
     print("="*60)
     
+    # 确定查询日期
+    if len(sys.argv) > 1:
+        query_date = sys.argv[1]
+    elif QUERY_DATE:
+        query_date = QUERY_DATE
+    else:
+        # 默认查询明天
+        query_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    print(f"\n📅 查询日期: {query_date}")
+    print(f"🛫 航线: 南通 → 长春\n")
+    
     crawler = FlightCrawler()
     
     try:
-        # 初始化浏览器
         crawler.init_driver()
-        
-        # 查询明天的航班
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-        print(f"\n📅 查询日期: {tomorrow}")
-        print(f"🛫 航线: 南通 → 长春\n")
-        
-        # 获取最低价
-        lowest = crawler.get_lowest_price(tomorrow)
+        lowest = crawler.get_lowest_price(query_date)
         
         if lowest:
-            # 格式化消息
             message = f"""
 🎫 *携程机票最低价*
 
@@ -226,10 +216,7 @@ def main():
             print(f"💰 价格: ¥{lowest['price']}")
             print("="*60)
             
-            # 保存数据
             save_to_file(lowest)
-            
-            # 发送 Telegram 通知
             send_telegram_message(message)
             
         else:
@@ -243,7 +230,6 @@ def main():
         send_telegram_message(error_msg)
         
     finally:
-        # 关闭浏览器
         crawler.close()
     
     print("\n✅ 任务完成")
